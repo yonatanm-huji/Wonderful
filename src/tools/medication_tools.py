@@ -394,6 +394,108 @@ class MedicationTools:
                 "success": False,
                 "error": f"Database error: {str(e)}"
             }
+    
+    def check_prescription(self, user_name: str, medication_name: str) -> Dict[str, Any]:
+        """
+        Check if a user has a valid prescription on file for a specific medication.
+        
+        Args:
+            user_name: Name of the patient (e.g., "Jalen Brunson")
+            medication_name: Name of the medication (e.g., "Semaglutide")
+        
+        Returns:
+            Dictionary with prescription status and details
+        
+        Example:
+            result = check_prescription("Jalen Brunson", "Semaglutide")
+            # Returns: {
+            #     "success": True,
+            #     "has_prescription": True,
+            #     "prescription": {
+            #         "patient_name": "Jalen Brunson",
+            #         "medication": "Semaglutide",
+            #         "prescribing_doctor": "Dr. Smith",
+            #         "date_prescribed": "2024-01-15",
+            #         "refills_remaining": 2
+            #     }
+            # }
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            # First check if medication requires a prescription
+            cursor.execute('''
+                SELECT medication_id, requires_prescription
+                FROM medications
+                WHERE LOWER(name) = LOWER(?)
+            ''', (medication_name,))
+            
+            med_result = cursor.fetchone()
+            
+            if not med_result:
+                conn.close()
+                return {
+                    "success": False,
+                    "error": f"Medication '{medication_name}' not found in database"
+                }
+            
+            medication_id, requires_prescription = med_result
+            
+            # If medication doesn't require prescription, return success
+            if not requires_prescription:
+                conn.close()
+                return {
+                    "success": True,
+                    "requires_prescription": False,
+                    "message": f"{medication_name} is available over-the-counter and does not require a prescription"
+                }
+            
+            # Check if user has a prescription on file
+            cursor.execute('''
+                SELECT 
+                    u.name,
+                    m.name,
+                    p.prescribing_doctor,
+                    p.date_prescribed,
+                    p.refills_remaining
+                FROM prescriptions p
+                JOIN users u ON p.user_id = u.user_id
+                JOIN medications m ON p.medication_id = m.medication_id
+                WHERE LOWER(u.name) = LOWER(?)
+                  AND p.medication_id = ?
+            ''', (user_name, medication_id))
+            
+            prescription = cursor.fetchone()
+            conn.close()
+            
+            if prescription:
+                return {
+                    "success": True,
+                    "requires_prescription": True,
+                    "has_prescription": True,
+                    "prescription": {
+                        "patient_name": prescription[0],
+                        "medication": prescription[1],
+                        "prescribing_doctor": prescription[2],
+                        "date_prescribed": prescription[3],
+                        "refills_remaining": prescription[4]
+                    },
+                    "message": f"Valid prescription found for {user_name}"
+                }
+            else:
+                return {
+                    "success": True,
+                    "requires_prescription": True,
+                    "has_prescription": False,
+                    "message": f"No prescription on file for {user_name} for {medication_name}. A valid prescription from a healthcare provider is required."
+                }
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Database error: {str(e)}"
+            }
 
 
 # Tool definitions for OpenAI function calling
@@ -469,6 +571,27 @@ TOOL_DEFINITIONS = [
                     }
                 },
                 "required": ["query_type"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_prescription",
+            "description": "Check if a patient has a valid prescription on file for a specific medication. Use this when someone wants to pick up a prescription medication to verify they have authorization. CRITICAL: Always call this before dispensing prescription medications.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "user_name": {
+                        "type": "string",
+                        "description": "Full name of the patient (e.g., 'Jalen Brunson')"
+                    },
+                    "medication_name": {
+                        "type": "string",
+                        "description": "Name of the medication (e.g., 'Semaglutide')"
+                    }
+                },
+                "required": ["user_name", "medication_name"]
             }
         }
     }
