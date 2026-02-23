@@ -577,6 +577,23 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "get_user_allergies",
+            "description": "Look up a patient's known allergies and current medications on file. CRITICAL: Call this when someone says 'I'm [Name]' or 'My name is [Name]', or when they ask to pick up medication for themselves or another named person. Must be called BEFORE checking inventory or confirming availability to check for allergy conflicts (e.g. Penicillin allergy vs Amoxicillin).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "user_name": {
+                        "type": "string",
+                        "description": "Full name of the patient (e.g., 'Jalen Brunson')"
+                    }
+                },
+                "required": ["user_name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "check_prescription",
             "description": "Check if a patient has a valid prescription on file for a specific medication. Use this when someone wants to pick up a prescription medication to verify they have authorization. CRITICAL: Always call this before dispensing prescription medications.",
             "parameters": {

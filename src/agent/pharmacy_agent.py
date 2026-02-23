@@ -1,5 +1,5 @@
 """
-Pharmacy AI Agent - Main agent that connects to OpenAI API
+Pharmacy AI Agent - Main agent that connects to OpenAI or Hugging Face
 Uses function calling to interact with medication tools
 Supports streaming responses in English and Hebrew
 """
@@ -18,6 +18,10 @@ from tools.medication_tools import MedicationTools, TOOL_DEFINITIONS
 # Load environment variables
 load_dotenv()
 
+# Default Hugging Face model (Llama 3.2 3B; supports one tool call per turn, multi-round loop handles chaining)
+DEFAULT_HF_MODEL = "meta-llama/Llama-3.2-3B-Instruct"
+
+
 class PharmacyAgent:
     """
     AI Agent for pharmacy customer service
@@ -25,22 +29,40 @@ class PharmacyAgent:
     - Checks inventory
     - Explains drug interactions
     - Refers to healthcare professionals when appropriate
+    - Supports OpenAI or Hugging Face (Inference API) via env vars
     """
-    
-    def __init__(self, api_key=None, model="gpt-4o"):
+
+    def __init__(self, api_key=None, model=None):
         """
-        Initialize the pharmacy agent
-        
+        Initialize the pharmacy agent.
+
+        Provider is chosen by environment:
+        - If HF_TOKEN is set: use Hugging Face Inference (base_url + HF token).
+          Model from HF_MODEL or default meta-llama/Llama-3.2-3B-Instruct.
+        - Else: use OpenAI. API key from OPENAI_API_KEY (or api_key arg).
+          Model from OPENAI_MODEL or api_key arg or default gpt-4o.
+
         Args:
-            api_key: OpenAI API key (if None, reads from .env)
-            model: OpenAI model to use (default: gpt-4o, but can use gpt-4-turbo or newer models)
+            api_key: API key for OpenAI (ignored when using Hugging Face)
+            model: Model name (overrides env when provided)
         """
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
-        if not self.api_key:
-            raise ValueError("OpenAI API key not found. Set OPENAI_API_KEY in .env file")
-        
-        self.client = OpenAI(api_key=self.api_key)
-        self.model = model
+        hf_token = os.getenv("HF_TOKEN")
+        if hf_token:
+            self._use_huggingface = True
+            self.client = OpenAI(
+                base_url="https://router.huggingface.co/v1",
+                api_key=hf_token,
+            )
+            self.model = model or os.getenv("HF_MODEL", DEFAULT_HF_MODEL)
+        else:
+            self._use_huggingface = False
+            self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+            if not self.api_key:
+                raise ValueError(
+                    "No API key found. Set OPENAI_API_KEY for OpenAI or HF_TOKEN for Hugging Face in .env"
+                )
+            self.client = OpenAI(api_key=self.api_key)
+            self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o")
         self.tools = MedicationTools()
         
         # System prompt defines the agent's behavior and policies
@@ -54,16 +76,16 @@ PERSONALITY:
 
 CRITICAL SAFETY PROTOCOLS - ALWAYS FOLLOW:
 1. When someone identifies themselves by name AND mentions a medication:
-   - You MUST call BOTH tools in the SAME response:
+   - You MUST call BOTH tools (you will get results after each call and can then call the next):
      a) get_medication_info(medication_name)
      b) get_user_allergies(user_name)
+   - If you can only call one tool at a time, call the most critical first (e.g. get_user_allergies when a name and medication are given), then you will receive the result and can call the next tool.
    - Do NOT just say you'll check - ACTUALLY CALL THE TOOL
-   - After calling both tools, analyze the results:
+   - After you have both results, analyze them:
      * If allergy conflict exists (e.g., Penicillin allergy + Amoxicillin): STOP, WARN, REFUSE
      * If no conflict: Proceed with inventory check if needed
    - Example: "I'm Jalen Brunson, can I get Amoxicillin?"
-     → Call get_medication_info("Amoxicillin")
-     → Call get_user_allergies("Jalen Brunson")  
+     → Call get_medication_info("Amoxicillin") and/or get_user_allergies("Jalen Brunson")
      → Check if Penicillin allergy conflicts with Amoxicillin (penicillin antibiotic)
      → If conflict: IMMEDIATELY warn about danger
 
@@ -125,7 +147,9 @@ Remember: You're an informational assistant with personality, not a healthcare p
             "get_medication_info": self.tools.get_medication_info,
             "check_active_ingredients_and_interactions": self.tools.check_active_ingredients_and_interactions,
             "check_inventory": self.tools.check_inventory,
-            "refer_to_professional": self.tools.refer_to_professional
+            "refer_to_professional": self.tools.refer_to_professional,
+            "get_user_allergies": self.tools.get_user_allergies,
+            "check_prescription": self.tools.check_prescription
         }
         
         if tool_name in tool_map:
@@ -137,60 +161,63 @@ Remember: You're an informational assistant with personality, not a healthcare p
     
     def chat(self, user_message: str, stream: bool = True) -> str:
         """
-        Send a message to the agent and get a response
-        
+        Send a message to the agent and get a response.
+        Supports multiple rounds of tool calls so models that return only one
+        tool call per response (e.g. Llama-3.2-3B) can still chain several tools.
+
         Args:
             user_message: The customer's question
             stream: Whether to stream the response (default: True)
-            
+
         Returns:
             The agent's response
         """
+        MAX_TOOL_ROUNDS = 8
+
         # Add user message to history
         self.conversation_history.append({
             "role": "user",
             "content": user_message
         })
-        
-        # Create messages array with system prompt
+
         messages = [
             {"role": "system", "content": self.system_prompt}
         ] + self.conversation_history
-        
+
         print(f"\n💬 USER: {user_message}")
-        
-        # Make API call with function calling
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            tools=TOOL_DEFINITIONS,
-            tool_choice="auto",  # Let the model decide when to use tools
-            stream=False  # We'll implement streaming in the next version
-        )
-        
-        # Get the assistant's response
-        assistant_message = response.choices[0].message
-        
-        # Check if the model wants to call tools
-        if assistant_message.tool_calls:
-            # Execute all tool calls
+
+        for _ in range(MAX_TOOL_ROUNDS):
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                tools=TOOL_DEFINITIONS,
+                tool_choice="auto",
+                stream=False
+            )
+            assistant_message = response.choices[0].message
+
+            if not assistant_message.tool_calls:
+                # Model is done with tools (content-only response)
+                response_text = assistant_message.content or ""
+                self.conversation_history.append({
+                    "role": "assistant",
+                    "content": response_text
+                })
+                print(f"\n🤖 ASSISTANT: {response_text}")
+                return response_text
+
+            # Execute all tool calls in this round
             tool_results = []
-            
             for tool_call in assistant_message.tool_calls:
                 function_name = tool_call.function.name
                 function_args = json.loads(tool_call.function.arguments)
-                
-                # Execute the tool
                 result = self._call_tool(function_name, function_args)
-                
-                # Add tool result to messages
                 tool_results.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,
                     "content": json.dumps(result)
                 })
-            
-            # Add assistant's message with tool calls to history
+
             self.conversation_history.append({
                 "role": "assistant",
                 "content": assistant_message.content,
@@ -206,42 +233,24 @@ Remember: You're an informational assistant with personality, not a healthcare p
                     for tc in assistant_message.tool_calls
                 ]
             })
-            
-            # Add tool results to history
             self.conversation_history.extend(tool_results)
-            
-            # Get final response from the model with tool results
             messages = [
                 {"role": "system", "content": self.system_prompt}
             ] + self.conversation_history
-            
-            final_response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                stream=False
-            )
-            
-            final_message = final_response.choices[0].message.content
-            
-            # Add final response to history
-            self.conversation_history.append({
-                "role": "assistant",
-                "content": final_message
-            })
-            
-            print(f"\n🤖 ASSISTANT: {final_message}")
-            return final_message
-        else:
-            # No tool calls, just return the response
-            response_text = assistant_message.content
-            
-            self.conversation_history.append({
-                "role": "assistant",
-                "content": response_text
-            })
-            
-            print(f"\n🤖 ASSISTANT: {response_text}")
-            return response_text
+
+        # Max tool rounds reached; get final natural-language reply (no tools)
+        final_response = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            stream=False
+        )
+        final_message = final_response.choices[0].message.content or ""
+        self.conversation_history.append({
+            "role": "assistant",
+            "content": final_message
+        })
+        print(f"\n🤖 ASSISTANT: {final_message}")
+        return final_message
     
     def chat_stream(self, user_message: str):
         """

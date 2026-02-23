@@ -58,6 +58,25 @@ http://localhost:5000
 
 # Save and close
 
+## Using Hugging Face instead of OpenAI
+
+You can run the agent with a model from [Hugging Face Inference](https://huggingface.co/docs/api-inference) (OpenAI-compatible API). No code change is needed—set Hugging Face env vars instead of OpenAI.
+
+1. Create a [Hugging Face token](https://huggingface.co/settings/tokens) with **Inference** (or “Inference Providers”) permission.
+2. In `.env` (or export in the shell):
+   - `HF_TOKEN=hf_xxxxxxxx`
+   - Optional: `HF_MODEL=meta-llama/Llama-3.2-3B-Instruct` (default) or another [chat model](https://huggingface.co/models?inference_provider=all&other=conversational) that supports tool calling. You can append `:fastest` or a provider (e.g. `meta-llama/Llama-3.2-3B-Instruct:fastest`).
+3. Do **not** set `OPENAI_API_KEY` when using Hugging Face (or the app will use OpenAI). The agent uses **HF_TOKEN** when present, otherwise **OPENAI_API_KEY**.
+
+**Llama 3.2:** For `meta-llama/Llama-3.2-3B-Instruct` you must accept the [Llama 3.2 Community License](https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct) on the model page and have access granted before your token can be used.
+
+**Docker:** pass the HF token when running:
+```bash
+export HF_TOKEN=hf_xxxxxxxx
+docker-compose up --build
+```
+Add `HF_TOKEN` and optionally `HF_MODEL` to `environment` in `docker-compose.yml` if you prefer to keep them in the file (do not commit real tokens).
+
 ## Overview of the Project
 The agent has 6 tools it can use to help customers. Each tool connects to the database to retrieve or check specific information. The agent is built using python on the backend and html on the front end. app.py is the application which incorporates the pharmacy.db, a database comprised of pharmaceutical and patient information. The database is further described below. In addition, there are six tools that the agent can call upon. Initially only three tools were built, but during testing, more limitations were unveiled that required the addition of more tools. The tooling is further detailed below.
 
