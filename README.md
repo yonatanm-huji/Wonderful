@@ -17,6 +17,47 @@ export OPENAI_API_KEY=your-key-here
 # Assuming you have docker installed and open, run Docker
 docker-compose up --build
 
+## locally
+
+# 1. Navigate to project
+cd ~/Desktop/Desktop/pharmacy-agent
+
+# 2. Activate virtual environment
+source venv/bin/activate
+
+# 3. Run Flask
+python3 app.py
+
+# 4. Open browser to:
+http://localhost:5000
+
+# 5. When done, stop Flask:
+Ctrl + C
+
+# 6. Deactivate venv:
+deactivate
+
+## updating API key
+
+cd ~/Desktop/Desktop/pharmacy-agent
+
+# Open the .env file
+open -e .env
+
+# Replace the old key with the new one:
+OPENAI_API_KEY=new-key-here
+
+# Activate venv
+source venv/bin/activate
+
+# Run Flask
+python3 app.py
+
+# Open browser
+http://localhost:5000
+
+# Save and close
+
 ## Overview of the Project
 The agent has 6 tools it can use to help customers. Each tool connects to the database to retrieve or check specific information. The agent is built using python on the backend and html on the front end. app.py is the application which incorporates the pharmacy.db, a database comprised of pharmaceutical and patient information. The database is further described below. In addition, there are six tools that the agent can call upon. Initially only three tools were built, but during testing, more limitations were unveiled that required the addition of more tools. The tooling is further detailed below.
 
