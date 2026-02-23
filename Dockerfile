@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py .
 COPY src/ ./src/
 COPY templates/ ./templates/
-COPY add_medications.py .
+COPY src/tools/add_medications.py ./add_medications.py
 
 # Copy database initialization script
 COPY src/database/init_db.py ./src/database/
